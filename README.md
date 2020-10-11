@@ -1,2 +1,2 @@
 # wallgame
-Simple game in LUA
+Simple game in LUA and Love2D
