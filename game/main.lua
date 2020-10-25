@@ -1,5 +1,8 @@
 function love.load()
 
+  floorImage = love.graphics.newImage( "floor.png" )
+  pathTile = love.graphics.newImage( "pathtile.png" )
+
 end
 
 pfWidth = 1536
@@ -61,18 +64,24 @@ end
 playState =
 {
   scrollPos = 0,
+  floorPos = 0,
   scrollSpeed = 32,
   sqCol = { { 0, 0.25, 0 }, { 0, 0, 0.25 } },
   wallWidth = 32,
   wallTypes = 2,
   walls = {},
   wallCol = { { 0.75, 0, 0 }, {0.15,0.65,0.8}, {0.5,0.5,0.5}, {0,0.65,0.65}, {0.65,0,0.65} },
-  playerCol = { 1.0, 1.0, 0.1 },
+  playerCol = { 1.0, 0.7, 0.2 },
+  walkerCol = { 0.9, 0.1, 0.9 },
+  gemCol = { 1.0, 1.0, 0.1 },
   levelLength = 1024,
   levelWidth = 16, -- default only
   pp = { x=0, y=0, dx=0, dy=0, sx=0.1, sy=0.1, l=1, mode="y" },
   ladder = { x=0, y=0, tx=0, ty=0, dx=0, dy=0, sx=0.0, sy=0.0, ready=false },
-  ladderCol = { { 0.25, 0.25, 0.5 }, { 0.5,0.5,1 } }
+  ladderCol = { { 0.25, 0.25, 0.5 }, { 0.5,0.5,1 } },
+  walkers = {},
+  walkerDir= { {dx=1,dy=0}, {dx=0,dy=1}, {dx=-1,dy=0}, {dx=0,dy=-1} },
+  gems = {},
 }
 
 function levelToScreen( lx, ly )
@@ -97,16 +106,24 @@ function drawPlay()
 	love.graphics.rectangle( "fill", pfWidth, 0, scWidth-pfWidth, scHeight )
 
 	-- Floor
-  local scrollMod = playState.scrollPos % (sqSize*2)
+  --local scrollMod = playState.floorPos % (sqSize*2)
+  --love.graphics.setScissor( 0, 0, pfWidth, pfHeight )
+  --for sy = -((sqSize*2)-scrollMod), pfHeight, sqSize*2 do
+  --  for sx = 0, pfWidth, sqSize*2 do
+  --    love.graphics.setColor( playState.sqCol[1] )
+  --    love.graphics.rectangle( "fill", sx, sy, sqSize, sqSize )
+  --    love.graphics.rectangle( "fill", sx+sqSize, sy+sqSize, sqSize, sqSize )
+  --    love.graphics.setColor( playState.sqCol[2] )
+  --    love.graphics.rectangle( "fill", sx+sqSize, sy, sqSize, sqSize )
+  --    love.graphics.rectangle( "fill", sx, sy+sqSize, sqSize, sqSize )
+  --  end
+  --end
+  local scrollMod = playState.floorPos % sqSize
   love.graphics.setScissor( 0, 0, pfWidth, pfHeight )
-  for sy = -((sqSize*2)-scrollMod), pfHeight, sqSize*2 do
-    for sx = 0, pfWidth, sqSize*2 do
-      love.graphics.setColor( playState.sqCol[1] )
-      love.graphics.rectangle( "fill", sx, sy, sqSize, sqSize )
-      love.graphics.rectangle( "fill", sx+sqSize, sy+sqSize, sqSize, sqSize )
-      love.graphics.setColor( playState.sqCol[2] )
-      love.graphics.rectangle( "fill", sx+sqSize, sy, sqSize, sqSize )
-      love.graphics.rectangle( "fill", sx, sy+sqSize, sqSize, sqSize )
+  love.graphics.setColor( 1,1,1 )
+  for sy = -(sqSize-scrollMod), pfHeight, sqSize do
+    for sx = 0, pfWidth, sqSize do
+      love.graphics.draw( floorImage, sx, sy ) 
     end
   end
 
@@ -121,9 +138,31 @@ function drawPlay()
           for x=1, playState.levelWidth do
             if playState.walls[y][x][et] then
               local sx, sy = levelToScreen( x, y )
-              love.graphics.rectangle( "fill", sx, sy, playState.wallWidth, playState.wallWidth )
+              love.graphics.draw( pathTile, sx, sy )
+              --love.graphics.rectangle( "fill", sx, sy, playState.wallWidth, playState.wallWidth )
             end
           end
+        end
+      end
+      -- Walkers get drawn just above their layers.
+      for k,walker in pairs( playState.walkers ) do
+        if walker.alive and walker.l==et then
+          love.graphics.setColor( playState.walkerCol )
+          local sx, sy = levelToScreen( walker.x, walker.y )
+          sx = sx + (walker.dx*playState.wallWidth) + (playState.wallWidth/4)
+          sy = sy - (walker.dy*playState.wallWidth) + (playState.wallWidth/4)
+          love.graphics.rectangle( "fill", sx, sy, playState.wallWidth/2, playState.wallWidth/2 )
+        end
+      end
+      -- Gems also get drawn just above their layers.
+      for k,gem in pairs( playState.gems ) do
+        if gem.alive and gem.l==et then
+          love.graphics.setColor( playState.gemCol )
+          local sx, sy = levelToScreen( gem.x, gem.y )
+          local ww = playState.wallWidth/2
+          sx = sx
+          sy = sy
+          love.graphics.polygon( "fill", sx+ww, sy, sx+ww+ww, sy+ww, sx+ww, sy+ww+ww, sx, sy+ww )
         end
       end
     end
@@ -144,6 +183,7 @@ function drawPlay()
     local x1, y1, x2, y2 = orderedRect(sx,sy,ux,uy)
     love.graphics.rectangle("fill",x1,y1,(x2+playState.wallWidth)-x1,(y2+playState.wallWidth)-y1)
   end
+
 
   -- Player
   love.graphics.setColor( playState.playerCol )
@@ -172,7 +212,7 @@ function onLadder( x, y )
   return false
 end
 
-function canEnter( x, dx, y, dy )
+function canEnter( x, dx, y, dy, l )
   if dx < 0 then 
     while dx < 0 do x=x-1 dx=dx+1 end
   else
@@ -186,7 +226,7 @@ function canEnter( x, dx, y, dy )
   if x < 1 or x > playState.levelWidth or y < 1 or y > playState.levelLength then
     return false
   end
-  if playState.walls[y][x][playState.pp.l] then
+  if playState.walls[y][x][l] then
     return true
   end
   return onLadder( x, y )
@@ -218,6 +258,7 @@ function updatePlay( dt )
 
   -- Scroll
   playState.scrollPos = playState.scrollPos + (dt* playState.scrollSpeed)
+  playState.floorPos = playState.floorPos + (dt* (playState.scrollSpeed*0.5))
 
   -- Movement inputs
   local oldX = playState.pp.x
@@ -232,7 +273,7 @@ function updatePlay( dt )
 
   if playState.pp.mode == "x" then
     if wantLeft then
-      if canEnter( playState.pp.x, playState.pp.dx-playState.pp.sx, playState.pp.y, 0 ) then
+      if canEnter( playState.pp.x, playState.pp.dx-playState.pp.sx, playState.pp.y, 0, playState.pp.l ) then
         playState.pp.dx = playState.pp.dx-playState.pp.sx
         if playState.pp.dx < -1 then
           playState.pp.x = playState.pp.x - 1
@@ -243,7 +284,7 @@ function updatePlay( dt )
       end
      end
     if wantRight then
-      if canEnter( playState.pp.x, playState.pp.dx+playState.pp.sx, playState.pp.y, 0 ) then
+      if canEnter( playState.pp.x, playState.pp.dx+playState.pp.sx, playState.pp.y, 0, playState.pp.l ) then
         playState.pp.dx = playState.pp.dx+playState.pp.sx
         if playState.pp.dx > 1 then
           playState.pp.x = playState.pp.x + 1
@@ -254,11 +295,11 @@ function updatePlay( dt )
       end  
     end
     if oldX ~= playState.pp.x or (oldDX*playState.pp.dx)<0 or math.abs(playState.pp.dx)<0.01 then
-      if wantUp and canEnter( playState.pp.x, 0, playState.pp.y, 1 ) then
+      if wantUp and canEnter( playState.pp.x, 0, playState.pp.y, 1, playState.pp.l ) then
         playState.pp.dx = 0
         playState.pp.dy = playState.pp.sy
         playState.pp.mode = "y"
-      elseif wantDown and canEnter( playState.pp.x, 0, playState.pp.y, -1 ) then
+      elseif wantDown and canEnter( playState.pp.x, 0, playState.pp.y, -1, playState.pp.l ) then
         playState.pp.dx = 0
         playState.pp.dy = -playState.pp.sy
         playState.pp.mode = "y"
@@ -266,7 +307,7 @@ function updatePlay( dt )
     end
   else
     if wantDown then
-      if canEnter( playState.pp.x, 0, playState.pp.y, playState.pp.dy-playState.pp.sy ) then
+      if canEnter( playState.pp.x, 0, playState.pp.y, playState.pp.dy-playState.pp.sy, playState.pp.l ) then
         playState.pp.dy = playState.pp.dy-playState.pp.sy
         if playState.pp.dy < -1 then
           playState.pp.y = playState.pp.y - 1
@@ -277,7 +318,7 @@ function updatePlay( dt )
       end
     end
     if wantUp then
-      if canEnter( playState.pp.x, 0, playState.pp.y, playState.pp.dy+playState.pp.sy ) then
+      if canEnter( playState.pp.x, 0, playState.pp.y, playState.pp.dy+playState.pp.sy, playState.pp.l ) then
         playState.pp.dy = playState.pp.dy+playState.pp.sy
         if playState.pp.dy > 1 then
           playState.pp.y = playState.pp.y + 1
@@ -288,11 +329,11 @@ function updatePlay( dt )
       end
     end
     if oldY ~= playState.pp.y or (oldDY*playState.pp.dy)<0 or math.abs(playState.pp.dy)<0.01 then
-      if wantRight and canEnter( playState.pp.x, 1, playState.pp.y, 0 ) then
+      if wantRight and canEnter( playState.pp.x, 1, playState.pp.y, 0, playState.pp.l ) then
         playState.pp.dy = 0
         playState.pp.dx = playState.pp.sx
         playState.pp.mode = "x"
-      elseif wantLeft and canEnter( playState.pp.x, -1, playState.pp.y, 0 ) then
+      elseif wantLeft and canEnter( playState.pp.x, -1, playState.pp.y, 0, playState.pp.l ) then
         playState.pp.dy = 0
         playState.pp.dx = -playState.pp.sx
         playState.pp.mode = "x"
@@ -306,25 +347,8 @@ function updatePlay( dt )
   if playState.pp.dy > 0.5 then playState.pp.dy=playState.pp.dy-1 playState.pp.y=playState.pp.y+1 end
   if playState.pp.dy < -0.5 then playState.pp.dy=playState.pp.dy+1 playState.pp.y=playState.pp.y-1 end
    
-  while playState.pp.dx >= 1 do
-    playState.pp.x = playState.pp.x + 1
-    playState.pp.dx = playState.pp.dx-1
-  end
-  while playState.pp.dx <= -1 do
-    playState.pp.x = playState.pp.x - 1
-    playState.pp.dx = playState.pp.dx+1
-  end
-  while playState.pp.dy >= 1.0 do
-    playState.pp.y = playState.pp.y + 1
-    playState.pp.dy = playState.pp.dy-1
-  end
-  while playState.pp.dy <= -1 do
-    playState.pp.y = playState.pp.y - 1
-    playState.pp.dy = playState.pp.dy+1
-  end
-
   -- Ladder place
-  if wantLadder and ( wantUp or wantDown or wantLeft or wantRight ) then
+  if wantLadder and ( wantUp or wantDown or wantLeft or wantRight ) and not onLadder(playState.pp.x,playState.pp.y) then
     playState.ladder.x = math.floor(playState.pp.x)
     playState.ladder.y = math.floor(playState.pp.y)
     playState.ladder.dx = 0
@@ -334,10 +358,10 @@ function updatePlay( dt )
     if wantUp or wantDown then
       if wantUp then py=1 else py=-1 end
       playState.ladder.sx = 0;
-      playState.ladder.sy = playState.pp.sy * 0.5 * py
+      playState.ladder.sy = playState.pp.sy * 2.0 * py
     else
       if wantRight then px=1 else px=-1 end
-      playState.ladder.sx = playState.pp.sx * 0.5 * px
+      playState.ladder.sx = playState.pp.sx * 2.0 * px
       playState.ladder.sy = 0;
     end
     playState.ladder.tx = playState.ladder.x+px
@@ -377,6 +401,40 @@ function updatePlay( dt )
       playState.pp.l = layerAt( playState.ladder.x, playState.ladder.y )
     elseif oldDist < newDist then
       playState.pp.l = layerAt( playState.ladder.tx, playState.ladder.ty )
+    end
+  end
+
+  -- Walker movement
+  for k,walker in pairs( playState.walkers ) do
+    if walker.alive then
+      local dir = playState.walkerDir[walker.direction]
+      local sx = dir.dx/16
+      local sy = dir.dy/16
+      if canEnter( walker.x, walker.dx+sx, walker.y, walker.dy+sy, walker.l ) then
+        walker.dx = walker.dx + sx
+        walker.dy = walker.dy + sy
+      else
+        walker.direction = walker.direction + 1
+        if walker.direction == 5 then walker.direction = 1 end
+      end
+      if walker.dx > 0.5 then walker.dx=walker.dx-1 walker.x=walker.x+1 end
+      if walker.dx < -0.5 then walker.dx=walker.dx+1 walker.x=walker.x-1 end
+      if walker.dy > 0.5 then walker.dy=walker.dy-1 walker.y=walker.y+1 end
+      if walker.dy < -0.5 then walker.dy=walker.dy+1 walker.y=walker.y-1 end
+
+      -- Collision
+      if walker.x == playState.pp.x and walker.y == playState.pp.y and walker.l == playState.pp.l then
+        appState = "ready"
+      end
+    end
+  end
+
+  -- Gem collect
+  for k,gem in pairs( playState.gems ) do
+    if gem.alive then
+      if gem.x == playState.pp.x and gem.y == playState.pp.y and gem.l == playState.pp.l then
+        gem.alive = false
+      end
     end
   end
 
@@ -465,10 +523,76 @@ function initPlay()
     playState.pp.x = playState.pp.x+1
   end
 
+  -- Place walkers
+  playState.walkers = {}
+  local walkerCount = 1
+  local y = math.random(1,5)
+  while y <= playState.levelLength do
+    local walkerLevel = math.random(1,2)
+    local newWalker = {}
+    local optCount = 0
+    for x = 1, playState.levelWidth do
+      if playState.walls[y][x][walkerLevel] then
+        optCount = optCount+1
+      end
+    end
+    local tgt = math.random( 1, optCount)
+    optCount = 0
+    for x = 1, playState.levelWidth do
+      if playState.walls[y][x][walkerLevel] then
+        optCount = optCount+1
+        if optCount == tgt then
+          newWalker.x = x
+        end
+      end
+    end
+    newWalker.y = y
+    newWalker.dx = 0
+    newWalker.dy = 0
+    newWalker.direction = math.random(1,4)
+    newWalker.l = walkerLevel
+    newWalker.alive = true
+    playState.walkers[walkerCount] = newWalker
+    walkerCount = walkerCount + 1
+    y = y + math.random( 3, 10 )
+  end
+
+  -- Place gems
+  playState.gems = {}
+  local gemCount = 1
+  local y = math.random(1,5)
+  while y <= playState.levelLength do
+    local gemLevel = math.random(1,2)
+    local newGem = {}
+    local optCount = 0
+    for x = 1, playState.levelWidth do
+      if playState.walls[y][x][gemLevel] then
+        optCount = optCount+1
+      end
+    end
+    local tgt = math.random( 1, optCount)
+    optCount = 0
+    for x = 1, playState.levelWidth do
+      if playState.walls[y][x][gemLevel] then
+        optCount = optCount+1
+        if optCount == tgt then
+          newGem.x = x
+        end
+      end
+    end
+    newGem.y = y
+    newGem.l = gemLevel
+    newGem.alive = true
+    playState.gems[gemCount] = newGem
+    gemCount = gemCount + 1
+    y = y + math.random( 2, 6 )
+  end
+
   playState.ladder.x = 0
   playState.ladder.ready = false
 
   playState.scrollPos = 0
+  playState.floorPos = 0
 
 end
 
